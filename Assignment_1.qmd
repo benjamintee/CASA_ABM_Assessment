@@ -56,9 +56,9 @@ Student Number: 25049107
 
 I, Tee Chin Min Benjamin, pledge my honour that the work presented in this assessment is my own. Where information has been derived from other sources, I confirm that this has been indicated in the work. AI (claude.ai) has been used to develop possible ideas for expanding the SugarScape model and for refining Netlogo code for analysis.
 
-Source code can be found [here]{.underline} (<https://github.com/benjamintee/CASA_ABM_Assessment>)
-Netlogo models can be found [here]{.underline} (<https://github.com/benjamintee/CASA_ABM_Assessment/nlogo>)
-HTML version can be found at the [here]{.underline} (<https://benjamintee.github.io/CASA_ABM_Assessment/Assignment_1.html>)
+Source code can be found [here]{.underline}(<https://github.com/benjamintee/CASA_ABM_Assessment>)  
+Netlogo models can be found [here]{.underline}(<https://github.com/benjamintee/CASA_ABM_Assessment/nlogo>)  
+HTML version can be found at the [here]{.underline}(<https://benjamintee.github.io/CASA_ABM_Assessment/Assignment_1.html>)  
 
 {{< pagebreak >}}
 
@@ -788,7 +788,7 @@ Screenshot of Netlogo Interface under Experiment 2 (S3)
 
 ![](data/paste-1.png)
 
-Source code can be found [here]{.underline} (<https://github.com/benjamintee/CASA_ABM_Assessment>)
+Source code can be found [here]{.underline} (<https://github.com/benjamintee/CASA_ABM_Assessment>)  
 Netlogo models can be found [here]{.underline} (<https://github.com/benjamintee/CASA_ABM_Assessment/nlogo>)
 
 ### References

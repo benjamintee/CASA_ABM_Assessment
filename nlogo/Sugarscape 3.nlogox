@@ -1246,5 +1246,49 @@ To inquire about commercial licenses for either NetLogo or specific models from 
         </enumeratedValueSet>
       </constants>
     </experiment>
+    <experiment name="S3_baseline_a (aggregate)" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition>ticks = 1000</exitCondition>
+      <runMetricsCondition>ticks = 1000</runMetricsCondition>
+      <metrics>
+        <metric>inheritance-rate</metric>
+        <metric>num-hills</metric>
+        <metric>gini</metric>
+        <metric>mean-wealth</metric>
+        <metric>mean-vision</metric>
+        <metric>mean-metabolism</metric>
+        <metric>mean-age</metric>
+        <metric>avg-inheritance</metric>
+        <metric>death-rate</metric>
+        <metric>age-deaths</metric>
+        <metric>starve-deaths</metric>
+      </metrics>
+      <constants>
+        <steppedValueSet variable="inheritance-rate" first="0" step="0.05" last="1"></steppedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="S3_baseline_b (aggregate)" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition>ticks = 1000</exitCondition>
+      <runMetricsCondition>ticks = 1000</runMetricsCondition>
+      <metrics>
+        <metric>inheritance-rate</metric>
+        <metric>num-hills</metric>
+        <metric>gini</metric>
+        <metric>mean-wealth</metric>
+        <metric>mean-vision</metric>
+        <metric>mean-metabolism</metric>
+        <metric>mean-age</metric>
+        <metric>avg-inheritance</metric>
+        <metric>death-rate</metric>
+        <metric>age-deaths</metric>
+        <metric>starve-deaths</metric>
+      </metrics>
+      <constants>
+        <steppedValueSet variable="inheritance-rate" first="0" step="0.05" last="1"></steppedValueSet>
+      </constants>
+    </experiment>
   </experiments>
 </model>

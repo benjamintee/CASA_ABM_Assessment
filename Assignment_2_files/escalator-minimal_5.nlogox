@@ -1,0 +1,952 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.3" snapToGrid="false">
+  <code><![CDATA[;; =======================================================================================
+;; INVESTIGATING THE HOLBORN UNDERGROUND ESCALATOR PARADOX 
+;; =======================================================================================
+;; An Agent-Based Model of Walking vs Standing Throughput on London Underground Escalators
+;;
+;; Goal: To investigate the counter-intuitive finding that prohibiting walking on escalators
+;; can increase the overall throughput during peak hours. 
+;;
+;; Research Question: How does the proportion of walking versus standing commuters affect escalator 
+;; throughput, and under what conditions does a standing-only policy outperform a mixed-behaviour 
+;; regime?
+
+;; Physical calibration:
+;;   1 tick = 0.533 seconds (time for escalator to advance 1 step)
+;;   1 patch = 1 escalator step = 0.4m depth
+;;   Estimated 60 steps for the Holborn escalator = 24m depth. 
+;;   Escalator speed = 0.75 m/s = 1 patch/tick
+;;   Walker extra speed = ~0.5 m/s on stairs = 1 extra patch/tick
+;;   1 minute = 113 ticks
+;; =======================================================================================
+
+globals [
+  ;; Set geometry
+  escalator-bottom-y
+  escalator-top-y
+  left-lane-x              ;; standing lane (x=0)
+  right-lane-x             ;; walking lane (x=1)
+  concourse-bottom-y
+  concourse-top-y
+
+  ;; Time
+  ticks-per-minute          ;; 113
+  rush-hour-start           ;; tick 3390 (08:30)
+  rush-hour-end             ;; tick 10170 (09:30)
+  sim-end-tick              ;; tick 13560 (10:00)
+
+  ;; Train system
+  next-train-tick           ;; arrival of underground train at rush-hour start
+  demand-pool               ;; passengers waiting to enter concourse
+
+  ;; Metrics
+  total-completed
+  rush-hour-completed
+  throughput-per-minute
+  max-peak-throughput
+  tick-window-completed
+
+  ;; Rolling averages
+  wait-time-list            ;; spawn-to-boarding durations
+  travel-time-list          ;; spawn-to-exit durations
+  mean-wait-time
+  mean-travel-time
+
+  ;; Peak-hour average throughput
+  rush-hour-throughput-sum   ;; sum of all per-minute throughputs during rush hour
+  rush-hour-minute-count     ;; number of minutes measured during rush hour
+]
+
+turtles-own [
+  is-walking?
+  walk-speed                ;; extra patches/tick beyond escalator (0 for standers)
+  arrival-tick              ;; when spawned
+  agent-state               ;; "approaching" | "queueing" | "on-escalator"
+  preferred-lane-x
+  blocked-ticks             ;; how many ticks waiting to board preferred lane
+]
+
+patches-own [
+  patch-type                ;; "escalator-left" | "escalator-right" | "concourse" |
+                            ;; "marshalling" | "background" | "exit-zone" | "spawn"
+  is-step?
+  step-number
+  dist-to-left         ;; Dijkstra distance to left lane gate
+  dist-to-right        ;; Dijkstra distance to right lane gate
+  dist-to-escalator         ;; Dijkstra distance
+  path-selected?
+]
+
+;; =======================================================================================
+;; SETUP
+;; =======================================================================================
+to setup
+  clear-all
+
+  ;; Time
+  set ticks-per-minute 113
+  set rush-hour-start (30 * ticks-per-minute)
+  set rush-hour-end (90 * ticks-per-minute)
+  set sim-end-tick (120 * ticks-per-minute)
+
+  ;; Train timing: fixed interval, first train at rush hour start
+  set next-train-tick rush-hour-start
+  set demand-pool []
+
+  ;; Counters
+  set total-completed 0
+  set rush-hour-completed 0
+  set throughput-per-minute 0
+  set tick-window-completed 0
+  set wait-time-list []
+  set travel-time-list []
+  set mean-wait-time 0
+  set mean-travel-time 0
+  set max-peak-throughput 0
+  set rush-hour-throughput-sum 0
+  set rush-hour-minute-count 0
+
+  ;; Geometry
+  set left-lane-x 0
+  set right-lane-x 1
+  set escalator-bottom-y 0
+  set escalator-top-y (escalator-length - 1)
+  set concourse-top-y -1
+  set concourse-bottom-y (concourse-top-y - 25 + 1) ;; Set concourse size to 25 
+
+  resize-world -19 20 (concourse-bottom-y - 1) (escalator-top-y + 3)
+
+  ;; ---- Patches ----
+  ask patches [
+    set patch-type "background"
+    set is-step? false
+    set step-number -1
+    set dist-to-escalator 1000000
+    set path-selected? false
+    set pcolor grey - 3.5
+  ]
+
+  ;; Escalator left lane
+  ask patches with [pxcor = left-lane-x and pycor >= escalator-bottom-y and pycor <= escalator-top-y] [
+    set patch-type "escalator-left"
+    set is-step? true
+    set step-number (pycor - escalator-bottom-y)
+    set pcolor 95 - 2
+  ]
+
+  ;; Escalator right lane
+  ask patches with [pxcor = right-lane-x and pycor >= escalator-bottom-y and pycor <= escalator-top-y] [
+    set patch-type "escalator-right"
+    set is-step? true
+    set step-number (pycor - escalator-bottom-y)
+    set pcolor 95 - 1
+  ]
+
+  ;; Boundary rails
+  ask patches with [(pxcor = left-lane-x - 1 or pxcor = right-lane-x + 1) and
+                     pycor >= escalator-bottom-y and pycor <= escalator-top-y] [
+    set patch-type "boundary"
+    set pcolor grey
+  ]
+
+  ;; Marshalling zone (funnel toward escalator)
+  ask patches with [pxcor >= (left-lane-x - 1) and pxcor <= (right-lane-x + 1) and pycor = -1] [
+    set patch-type "marshalling"
+    set pcolor 34
+  ]
+  ask patches with [pxcor >= (left-lane-x - 2) and pxcor <= (right-lane-x + 2) and pycor = -2] [
+    if patch-type != "marshalling" [ set patch-type "marshalling" set pcolor 33.5 ]
+  ]
+  ask patches with [pxcor >= (left-lane-x - 3) and pxcor <= (right-lane-x + 3) and pycor = -3] [
+    if patch-type != "marshalling" [ set patch-type "marshalling" set pcolor 33 ]
+  ]
+  ask patches with [pxcor >= (left-lane-x - 4) and pxcor <= (right-lane-x + 4) and pycor = -4] [
+    if patch-type != "marshalling" [ set patch-type "marshalling" set pcolor 32.5 ]
+  ]
+
+  ;; Concourse
+  ask patches with [pxcor >= -10 and pxcor <= 11 and pycor >= concourse-bottom-y and pycor <= -5] [
+    if patch-type = "background" [ set patch-type "concourse" set pcolor 32 ]
+  ]
+
+  ;; Spawn zone (bottom 10 rows)
+  ask patches with [pxcor >= -10 and pxcor <= 11 and
+                     pycor >= concourse-bottom-y and pycor <= concourse-bottom-y + 9] [
+    set patch-type "spawn"
+    set pcolor 31
+  ]
+
+  ;; Exit zone
+  ask patches with [pxcor >= left-lane-x and pxcor <= right-lane-x and
+                     pycor > escalator-top-y and pycor <= escalator-top-y + 2] [
+    set patch-type "exit-zone"
+    set pcolor 55 - 2
+  ]
+
+  ;; Dijkstra
+  compute-distance-field
+
+  reset-ticks
+end
+
+;; =======================================================================================
+;; DIJKSTRA (SHORTEST PATH) — LANE-SPECIFIC DISTANCE FIELDS
+;; =======================================================================================
+;; Computes THREE distance fields:
+;;   dist-to-left   — shortest walking distance to left lane gate (patch 0, -1)
+;;   dist-to-right  — shortest walking distance to right lane gate (patch 1, -1)
+;;   dist-to-escalator — minimum of the two (used as fallback)
+;;
+;; During approach, agents follow their lane-specific field:
+;;   - Standers follow dist-to-left  → naturally stream toward the standing lane
+;;   - Walkers follow dist-to-right  → naturally stream toward the walking lane
+;;   - Standing-only agents follow dist-to-escalator → take whichever is closer
+;;
+;; This attempts to produce realistic crowd separation in the concourse: two visible
+;; streams forming before the marshalling zone.
+;; =======================================================================================
+to compute-distance-field
+  let walkable-types ["concourse" "marshalling" "spawn"]
+
+  ;; --- Field 1: distance to LEFT lane gate ---
+  ask patches [
+    set dist-to-left 1000000
+    set path-selected? false
+  ]
+  ask patch left-lane-x -1 [ set dist-to-left 0 ]
+  dijkstra-fill "dist-to-left" walkable-types
+
+  ;; --- Field 2: distance to RIGHT lane gate ---
+  ask patches [
+    set dist-to-right 1000000
+    set path-selected? false
+  ]
+  ask patch right-lane-x -1 [ set dist-to-right 0 ]
+  dijkstra-fill "dist-to-right" walkable-types
+
+  ;; --- Combined field: minimum of both when 100% walkers or standers ---
+  ask patches with [member? patch-type walkable-types] [
+    set dist-to-escalator min (list dist-to-left dist-to-right)
+  ]
+end
+
+;; Define a dijkstra-fil helper function to compute distance field for above cases.
+to dijkstra-fill [field-name walkable-types]
+  let unvisited-exist true
+  while [unvisited-exist] [
+    ;; Find unselected patch with minimum distance in the target field
+    let candidates patches with [
+      path-selected? = false and
+      member? patch-type walkable-types
+    ]
+
+    ;; Select candidate with minimum distance
+    let chosen nobody
+    if field-name = "dist-to-left" [
+      set chosen min-one-of candidates [dist-to-left]
+    ]
+    if field-name = "dist-to-right" [
+      set chosen min-one-of candidates [dist-to-right]
+    ]
+
+    ;; Stop if no reachable candidate found
+    ifelse chosen = nobody [
+      set unvisited-exist false
+    ] [
+      ;; Check if the chosen patch has infinite distance (unreachable)
+      let chosen-dist 1000000
+      if field-name = "dist-to-left"  [ set chosen-dist [dist-to-left] of chosen ]
+      if field-name = "dist-to-right" [ set chosen-dist [dist-to-right] of chosen ]
+
+      ifelse chosen-dist >= 1000000 [
+        set unvisited-exist false     ;; all remaining patches are unreachable
+      ] [
+        ask chosen [
+          set path-selected? true
+
+          ;; Update unvisited walkable neighbours
+          ask neighbors4 with [member? patch-type walkable-types and path-selected? = false] [
+            let new-dist chosen-dist + 1
+            if field-name = "dist-to-left" and new-dist < dist-to-left [
+              set dist-to-left new-dist
+            ]
+            if field-name = "dist-to-right" and new-dist < dist-to-right [
+              set dist-to-right new-dist
+            ]
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+;; =======================================================================================
+;; GO
+;; (1) ARRIVAL (2) APPROACH (3) BOARDING (4) MOVEMENT (5) EXIT (6) UPDATE METRICS
+;; =======================================================================================
+to go
+  if ticks >= sim-end-tick [ stop ]
+
+  submodel-arrival
+  submodel-approach
+  submodel-boarding
+  submodel-movement
+  submodel-exit
+ 
+  update-metrics
+
+  tick
+end
+
+;; =======================================================================================
+;; (1) ARRIVAL
+;; =======================================================================================
+;; Segment generates commuter arrivals onto the concourse, representing both peak-period
+;; train unloadings and off-peak background flow.
+;;
+;; Key mechanisms:
+;; 1. Rush hour arrivals occur in discrete batches at fixed time intervals, approximating
+;;    train arrivals and platform clearance.
+;; 2. When inflow exceeds available space, commuters accumulate in a "demand pool", 
+;;    representing platform congestion and delayed entry.
+;; 3. The demand pool is gradually released into the concourse at a capped spawn rate, 
+;;    introducing a realistic bottleneck at entry points.
+;; 4. Off-peak arrivals follow a low-probability stochastic process, simulating background 
+;;     passenger trickle.
+;; =======================================================================================
+
+to submodel-arrival
+  ;; (1A) Rush hour: trains arrive - Add arrival timestamps to the list
+  if ticks >= rush-hour-start and ticks <= rush-hour-end [
+    if ticks >= next-train-tick [
+      repeat batch-size [
+        set demand-pool lput ticks demand-pool
+      ]
+      set next-train-tick ticks + (train-interval-minutes * ticks-per-minute)
+    ]
+  ]
+
+  ;; (1B) Off-peak: arrivals
+  if ticks < rush-hour-start or ticks > rush-hour-end [
+    if random ticks-per-minute < off-peak-rate [
+      set demand-pool lput ticks demand-pool
+    ]
+  ]
+
+  ;; (1C) Spawning Logic - Use the list length as count
+  let to-spawn min (list (length demand-pool) 30) ;; allow up to 30 agents to spawn per tick
+  
+  repeat to-spawn [
+    let spawn-patches patches with [patch-type = "spawn" and not any? turtles-here]
+    
+    ifelse any? spawn-patches [
+      ;; Get the OLDEST arrival time from the front of the list
+      let true-arrival-time item 0 demand-pool
+      set demand-pool but-first demand-pool
+      
+      ask one-of spawn-patches [
+        sprout 1 [
+          set shape "person"
+          set size 0.85
+          set arrival-tick true-arrival-time  ;; Use the time they entered the platform
+          set agent-state "approaching"
+          set blocked-ticks 0
+          set heading 0
+
+          ;; (1D) Attribute assignment (Walker vs Stander)
+          set is-walking? (random-float 100 < pct-walkers)
+
+          ifelse is-walking? [
+            set walk-speed walk-probability
+            set color yellow
+            ;; Lane Logic
+            ifelse pct-walkers = 100 
+              [ set preferred-lane-x one-of (list left-lane-x right-lane-x) ]
+              [ set preferred-lane-x right-lane-x ]
+          ] [
+            set walk-speed 0
+            set color cyan
+            ;; Lane Logic
+            ifelse pct-walkers = 0 
+              [ set preferred-lane-x one-of (list left-lane-x right-lane-x) ]
+              [ set preferred-lane-x left-lane-x ]
+          ]
+        ]
+      ]
+    ] [
+      ;; If no space in spawn patches, stop spawning for this tick
+      stop 
+    ]
+  ]
+end
+
+;; ============================================================================
+;; (2) APPROACH (Dijkstra pathfinding)
+;; ============================================================================
+;; Agents follow their lane-specific distance field:
+;;   - Standers (preferred-lane-x = left)  → follow dist-to-left
+;;   - Walkers  (preferred-lane-x = right) → follow dist-to-right
+;;   - Standing-only policy (pct-walkers = 0) → follow dist-to-escalator (shortest to either)
+;;
+;; This creates two natural streams in the concourse that merge attempting to 
+;; produce realistic crowd dynamics.
+;; ============================================================================
+to submodel-approach
+  ask turtles with [agent-state = "approaching"] [
+    ;; In marshalling zone? transition to queueing
+    if [patch-type] of patch-here = "marshalling" [
+      set agent-state "queueing"
+      stop
+    ]
+
+    ;; Determine which distance field to follow
+    ;; Standing-only: no lane preference, follow combined field
+    ;; Mixed: follow lane-specific field based on preferred lane
+    let follow-field "combined"
+    if pct-walkers > 0 and pct-walkers < 100 [
+      ifelse preferred-lane-x = left-lane-x [
+        set follow-field "left"
+      ] [
+        set follow-field "right"
+      ]
+    ]
+
+    ;; Follow gradient toward preferred gate
+    let walkable-neighbours neighbors4 with [
+      (patch-type = "concourse" or patch-type = "marshalling" or patch-type = "spawn") and
+      not any? turtles-here
+    ]
+
+    if any? walkable-neighbours [
+      ;; Select best neighbour based on the appropriate distance field
+      let best nobody
+      if follow-field = "left" [
+        set best min-one-of walkable-neighbours [dist-to-left]
+        if best != nobody and [dist-to-left] of best >= [dist-to-left] of patch-here [
+          set best nobody  ;; don't move if not getting closer
+        ]
+      ]
+      if follow-field = "right" [
+        set best min-one-of walkable-neighbours [dist-to-right]
+        if best != nobody and [dist-to-right] of best >= [dist-to-right] of patch-here [
+          set best nobody
+        ]
+      ]
+      if follow-field = "combined" [
+        set best min-one-of walkable-neighbours [dist-to-escalator]
+        if best != nobody and [dist-to-escalator] of best >= [dist-to-escalator] of patch-here [
+          set best nobody
+        ]
+      ]
+
+      if best != nobody [
+        face best
+        move-to best
+      ]
+    ]
+
+    ;; Re-check after moving
+    if [patch-type] of patch-here = "marshalling" [
+      set agent-state "queueing"
+    ]
+  ]
+end
+
+;; ============================================================================
+;; (3) BOARDING
+;; ============================================================================
+;; Governs how agents transition from the concourse queue onto the escalator.
+;;
+;; CORE MECHANICS:
+;; 1. Agents are processed in order of proximity to the escalator, then FIFO.
+;; 2. Each agent attempts to board their preferred lane first.
+;; 3. Boarding is only possible if the bottom N steps of the lane are empty,
+;;    where N = step-gap (encodes capacity constraints).
+;; 4. If blocked, agents wait and may switch lanes after a delay.
+;; 5. Upon boarding, agents adopt the behaviour (walking/standing) appropriate
+;;    to the lane they enter.
+;;
+;; GAP REQUIRED:
+;; - step-gap-stand = 2 → dense packing (~56 pax/min/lane)
+;; - step-gap-walk  = 3 → lower density (~38 pax/min/lane)
+;;
+;; BEHAVIOURAL RULES:
+;; - Mixed regime: walkers prefer right lane, standers prefer left lane
+;; - Standing-only (pct-walkers = 0): no lane discipline → both lanes used
+;; - Lane switching occurs only after waiting (lane-discipline threshold)
+;;
+;; This structure allows congestion and throughput to emerge endogenously.
+;; ============================================================================
+to submodel-boarding
+  
+  ;; (3A) Sort queue: closest to escalator first, then FIFO by arrival tick
+  let queued sort-by [[a b] ->
+    ifelse-value ([dist-to-escalator] of patch-here-of a < [dist-to-escalator] of patch-here-of b) [true]
+      [ifelse-value ([dist-to-escalator] of patch-here-of a = [dist-to-escalator] of patch-here-of b)
+        [[arrival-tick] of a < [arrival-tick] of b]
+        [false]]
+  ] turtles with [agent-state = "queueing"]
+
+  ;; (3B) Process each agent sequentially
+  foreach queued [ agent ->
+    ask agent [
+      ;; Identify preferred and alternative lanes
+      let pref-x preferred-lane-x                                 ;; Create local variable (pref-x) that pulls from agent's preferred lane 
+      let alt-x ifelse-value (pref-x = left-lane-x)               ;; Create local variable (alt-x) that asks if agent's preferred lane is left 
+          [right-lane-x]                                          ;; if true, alternative lane is right-lane-x
+          [left-lane-x]                                           ;; if false, alternative lane is left-lane-x
+
+      ;; Determine step gaps for boarding
+      let pref-gap ifelse-value (pct-walkers = 100)
+         [step-gap-walk]                            ;; everyone walks: walking gap in both lanes
+         [ifelse-value (pref-x = left-lane-x)
+           [step-gap-stand]                         ;; left lane under mixed/standing: standing gap
+           [ifelse-value (pct-walkers = 0)
+             [step-gap-stand]                       ;; right lane under standing-only: standing gap
+             [step-gap-walk]                        ;; right lane under mixed: walking gap
+           ]
+         ]
+      
+      let alt-gap ifelse-value (pct-walkers = 100)
+         [step-gap-walk]                            ;; everyone walks: walking gap in both lanes
+         [ifelse-value (alt-x = left-lane-x)
+           [step-gap-stand]                         ;; left lane under mixed/standing: standing gap
+           [ifelse-value (pct-walkers = 0)
+             [step-gap-stand]                       ;; right lane under standing-only: standing gap
+             [step-gap-walk]                        ;; right lane under mixed: walking gap
+           ]
+         ]
+    
+      ;; Preferred lane boarding attempt
+      let pref-clear? lane-clear? pref-x pref-gap                 ;; Checks function called lane-clear? with arguments pref-x and pref-gap
+
+      ifelse pref-clear? 
+       [
+        board-lane pref-x                                         ;; if preferred lane is clear, board preferred lane
+        set blocked-ticks 0
+       ] 
+       [
+        ;; Preferred lane not clear
+        set blocked-ticks blocked-ticks + 1                      ;; if preferred lane is not clear, increase wait count  
+
+        ;; Lane discipline check
+        let can-try-alt? false
+        let lane-discipline (lane-discipline-seconds * ticks-per-minute / 60)
+        ifelse pct-walkers = 0 [
+          set can-try-alt? true                                   ;; if standing-only: try alt immediately
+        ] [
+          if blocked-ticks > lane-discipline [                    ;; lane discipline sets how many ticks they will wait before switching
+            set can-try-alt? true                                 ;; if mixed: wait until threshold before switching
+          ]
+        ]
+
+        ;; Alternative lane boarding attempt 
+        if can-try-alt? [                                         ;; if allowed to try alternative 
+          let alt-clear? lane-clear? alt-x alt-gap                ;; repeat process to check if alternative lane is clear 
+          if alt-clear? [
+            board-lane alt-x                                      ;; if alternative lane is clear, board alternative lane
+            ;; Adapt behaviour
+            ifelse alt-x = left-lane-x [
+              ifelse pct-walkers = 100 [
+                set is-walking? true                              ;; everyone walks, even in left lane
+                set walk-speed walk-probability
+                set color yellow
+              ] [
+                set is-walking? false
+                set walk-speed 0
+                set color cyan
+              ]
+            ] [
+              ifelse pct-walkers = 0 [                            ;; if pct-walkers are 0, also do the same 
+                set is-walking? false
+                set walk-speed 0
+                set color cyan
+              ] [
+                set is-walking? true                              ;; change agent's behavior to set walking true, speed walk-probability, change color 
+                set walk-speed walk-probability
+                set color yellow
+              ]
+            ]
+            set blocked-ticks 0                                   ;; reset blocked ticks to zero 
+          ]
+        ]
+      ]
+
+      ;; If still queueing, shuffle closer
+      if agent-state = "queueing" [
+        let walkable-neighbours neighbors4 with [
+          (patch-type = "marshalling" or patch-type = "concourse") and
+          not any? turtles-here
+        ]
+        if any? walkable-neighbours [
+          let best min-one-of walkable-neighbours [dist-to-escalator]
+          if best != nobody and [dist-to-escalator] of best <= [dist-to-escalator] of patch-here [
+            move-to best
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+;; Function 1 (lane-clear?) Check if the bottom N steps of a lane are all empty 
+to-report lane-clear? [lane-x gap]
+  let clear? true                                       ;; assume the lane is clear until proven otherwise
+  let step 0                                            ;; start at the very first step (index 0)
+  while [step < gap] [                                  ;; scan forward until the required gap 
+    let p patch lane-x (escalator-bottom-y + step)      ;; identify inspection patch
+    if p = nobody or any? turtles-on p [                ;; if patch doesn't exist or if there's already a person there, 
+      set clear? false                                  ;; lane is not clear 
+      set step gap  ;; break                            ;; no need to check further 
+    ]
+    set step step + 1                                   ;; move on to next patch in sequence 
+  ]
+  report clear?                                         ;; send report back
+end
+
+;; Function 2 (board-lane) Board the lane 
+to board-lane [lane-x]
+  move-to patch lane-x escalator-bottom-y               ;; move to the bottom of the boarding lane
+  set agent-state "on-escalator"                        ;; change the state of the agent 
+
+  ;; Record wait time
+  let wait-dur (ticks - arrival-tick)
+  set wait-time-list lput wait-dur wait-time-list
+  if length wait-time-list > 1500 [
+    set wait-time-list sublist wait-time-list (length wait-time-list - 1500) (length wait-time-list)
+  ]
+end
+
+;; Helper: get patch-here for sorting
+to-report patch-here-of [agent]
+  report [patch-here] of agent
+end
+
+
+;; ============================================================================
+;; (4) MOVEMENT
+;; ============================================================================
+;; Escalator carries all agents 1 step/tick (mechanical).
+;; Walkers ADDITIONALLY take 1 extra step with probability walk-speed%.
+;; This models fractional walking speeds:
+;;   walk-speed=100 → always step (total 1.5 m/s)
+;;   walk-speed=66  → 66% chance (total ~1.25 m/s)
+;;   walk-speed=50  → 50% chance (total ~1.13 m/s)
+;; Only blocked by agents in the SAME lane ahead.
+;; ============================================================================
+to submodel-movement
+  let on-esc sort-by [[a b] -> [ycor] of a > [ycor] of b]
+              turtles with [agent-state = "on-escalator"]
+
+  foreach on-esc [ agent ->
+    ask agent [
+      if pycor >= escalator-top-y [ stop ]
+
+      ;; Escalator mechanical movement (1 step/tick)
+      let next-step patch pxcor (pycor + 1)
+      let moved? false
+
+      if next-step != nobody and [is-step?] of next-step and
+         not any? turtles-on next-step [
+        move-to next-step
+        set moved? true
+      ]
+
+      ;; Walker extra step (probabilistic)
+      ;; Only attempt if escalator moved successfully
+      if is-walking? and walk-speed > 0 and moved? [
+        ;; Roll against walk-speed probability (0-100)
+        if random 100 < walk-speed [
+          let tgt patch pxcor (pycor + 1)
+          if tgt != nobody and [is-step?] of tgt and not any? turtles-on tgt [
+            move-to tgt
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+;; ============================================================================
+;; (5) EXIT
+;; ============================================================================
+to submodel-exit
+  
+  ;; Identify agents who have reached or passed the top of the escalator
+  ask turtles with [agent-state = "on-escalator" and pycor >= escalator-top-y] [    
+    
+    ;; (5A) Calculate journey time (wait + travel on escalator)
+    let tt (ticks - arrival-tick)
+    set travel-time-list lput tt travel-time-list
+    if length travel-time-list > 1500 [
+      set travel-time-list sublist travel-time-list (length travel-time-list - 1500) (length travel-time-list)
+    ]
+
+    ;; (5B) Calculate throughput 
+    set total-completed total-completed + 1
+    set tick-window-completed tick-window-completed + 1
+
+    ;; (5C) Track specific throughput performance during the defined rush-hour window
+    if ticks >= rush-hour-start and ticks <= rush-hour-end [
+      set rush-hour-completed rush-hour-completed + 1
+    ]
+
+    ;; (5D) Remove agents that have completed the process
+    die
+  ]
+end
+
+;; ============================================================================
+;; (6) METRICS AND REPORTING
+;; ============================================================================
+to update-metrics
+  ;; Per-minute throughput
+  if ticks > 0 and ticks mod ticks-per-minute = 0 [
+    set throughput-per-minute tick-window-completed
+
+    ;; Track rush-hour average
+    if ticks >= rush-hour-start and ticks <= rush-hour-end [
+      set rush-hour-throughput-sum rush-hour-throughput-sum + throughput-per-minute
+      set rush-hour-minute-count rush-hour-minute-count + 1
+      
+      if throughput-per-minute > max-peak-throughput [
+        set max-peak-throughput throughput-per-minute
+      ]
+    ]
+
+    set tick-window-completed 0
+  ]
+
+  ;; Rolling averages
+  ifelse length wait-time-list > 0
+    [ set mean-wait-time mean wait-time-list ]
+    [ set mean-wait-time 0 ]
+
+  ifelse length travel-time-list > 0
+    [ set mean-travel-time mean travel-time-list ]
+    [ set mean-travel-time 0 ]
+end
+
+;; REPORTERS
+to-report current-time
+  let total-minutes (ticks / ticks-per-minute) + (8 * 60)
+  let hours floor (total-minutes / 60)
+  let mins floor (total-minutes mod 60)
+  report (word (ifelse-value (hours < 10) ["0"] [""]) hours ":"
+               (ifelse-value (mins < 10) ["0"] [""]) mins)
+end
+
+to-report is-rush-hour?
+  report (ticks >= rush-hour-start and ticks <= rush-hour-end)
+end
+
+to-report on-escalator-count
+  report count turtles with [agent-state = "on-escalator"]
+end
+
+to-report avg-peak-throughput
+  ;; Average throughput per minute during rush hour only
+  ifelse rush-hour-minute-count > 0
+    [ report precision (rush-hour-throughput-sum / rush-hour-minute-count) 1 ]
+    [ report 0 ]
+end
+
+to-report max-rush-throughput
+  report max-peak-throughput
+end
+
+to-report rush-hour-total
+  report rush-hour-completed
+end
+
+to-report total-served
+  report total-completed
+end
+
+to-report mean-wait-seconds
+  report precision (mean-wait-time * 0.533) 1
+end
+
+to-report mean-travel-seconds
+  report precision (mean-travel-time * 0.533) 1
+end
+
+to-report current-throughput
+  report throughput-per-minute
+end
+
+to-report demand-pool-size
+  report length demand-pool
+end]]></code>
+  <widgets>
+    <view x="208" wrappingAllowedX="false" y="9" frameRate="30.0" minPycor="-26" height="823" showTickCounter="true" patchSize="8.28" fontSize="10" wrappingAllowedY="false" width="373" tickCounterLabel="ticks" maxPycor="62" updateMode="0" maxPxcor="20" minPxcor="-19"></view>
+    <slider x="10" step="5" y="10" max="100" width="190" display="pct-walkers" height="50" min="0" direction="Horizontal" default="40.0" variable="pct-walkers" units="%"></slider>
+    <slider x="10" step="5" y="67" max="60" width="190" display="escalator-length" height="50" min="20" direction="Horizontal" default="60.0" variable="escalator-length" units="steps"></slider>
+    <slider x="10" step="10" y="124" max="500" width="190" display="batch-size" height="50" min="50" direction="Horizontal" default="220.0" variable="batch-size" units="commuters"></slider>
+    <slider x="10" step="0.5" y="181" max="5" width="190" display="train-interval-minutes" height="50" min="1" direction="Horizontal" default="2.0" variable="train-interval-minutes" units="min"></slider>
+    <slider x="10" step="1" y="238" max="3" width="190" display="step-gap-stand" height="50" min="0" direction="Horizontal" default="2.0" variable="step-gap-stand" units="ticks"></slider>
+    <slider x="10" step="1" y="295" max="4" width="190" display="step-gap-walk" height="50" min="0" direction="Horizontal" default="3.0" variable="step-gap-walk" units="ticks"></slider>
+    <slider x="10" step="1" y="352" max="100" width="190" display="walk-probability" height="50" min="0" direction="Horizontal" default="100.0" variable="walk-probability" units="%"></slider>
+    <slider x="10" step="1" y="408" max="30" width="190" display="off-peak-rate" height="50" min="0" direction="Horizontal" default="20.0" variable="off-peak-rate" units="per minute"></slider>
+    <slider x="8" step="30" y="463" max="300" width="190" display="lane-discipline-seconds" height="50" min="0" direction="Horizontal" default="120.0" variable="lane-discipline-seconds" units="s"></slider>
+    <button x="106" y="519" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="90" display="Go">go</button>
+    <button x="8" y="519" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="90" display="Setup">setup</button>
+    <plot x="590" autoPlotX="true" yMax="120.0" autoPlotY="true" yAxis="Agents/Min" y="9" xMin="0.0" height="190" legend="false" xMax="120.0" yMin="0.0" width="400" xAxis="Ticks" display="Throughput Over Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="throughput" color="-13345367" legend="true">
+        <setup></setup>
+        <update><![CDATA[if ticks > 0 and ticks mod ticks-per-minute = 0 [ plot throughput-per-minute ]]]></update>
+      </pen>
+    </plot>
+    <monitor x="995" precision="1" y="75" height="60" fontSize="11" width="207" display="Avg Peak Hr Throughput/min">avg-peak-throughput</monitor>
+    <monitor x="995" precision="1" y="137" height="60" fontSize="11" width="206" display="Max Peak Hr Throughput">max-peak-throughput</monitor>
+    <monitor x="1097" precision="0" y="12" height="60" fontSize="11" width="100" display="Rush Hour?">is-rush-hour?</monitor>
+    <monitor x="995" precision="0" y="12" height="60" fontSize="11" width="100" display="Time">current-time</monitor>
+    <plot x="592" autoPlotX="true" yMax="60.0" autoPlotY="true" yAxis="Seconds" y="205" xMin="0.0" height="190" legend="false" xMax="10000.0" yMin="0.0" width="400" xAxis="Ticks" display="Mean Wait Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="wait" color="-612749" legend="true">
+        <setup></setup>
+        <update><![CDATA[if length wait-time-list > 0 [ plot mean-wait-time * 0.533 ]]]></update>
+      </pen>
+    </plot>
+    <monitor x="997" precision="0" y="203" height="60" fontSize="11" width="203" display="Rush Hr Customers Served">rush-hour-total</monitor>
+    <monitor x="998" precision="0" y="267" height="60" fontSize="11" width="200" display="Total Customers Served">total-served</monitor>
+    <monitor x="997" precision="0" y="332" height="60" fontSize="11" width="204" display="Demand Pool">demand-pool-size</monitor>
+    <monitor x="997" precision="1" y="400" height="60" fontSize="11" width="185" display="Average Wait in Station (sec)">mean-wait-seconds</monitor>
+    <monitor x="997" precision="1" y="465" height="60" fontSize="11" width="185" display="Avg Wait + Travel (sec)">mean-travel-seconds</monitor>
+    <plot x="592" autoPlotX="true" yMax="120.0" autoPlotY="true" yAxis="Seconds" y="400" xMin="0.0" height="190" legend="false" xMax="10000.0" yMin="0.0" width="400" xAxis="Ticks" display="Mean Travel Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="travel" color="-10899396" legend="true">
+        <setup></setup>
+        <update><![CDATA[if length travel-time-list > 0 [ plot mean-travel-time * 0.533 ]]]></update>
+      </pen>
+    </plot>
+  </widgets>
+  <info>## MINIMAL CALIBRATION MODEL
+
+Stripped-back escalator model for verifying core throughput mechanics.
+
+### What's included
+- Arrival (demand pool + spawn)
+- Approach (Dijkstra pathfinding)
+- Boarding (step-gap cooldown only, no patience)
+- Movement (escalator carry + walker extra steps)
+- Exit
+
+### What's excluded
+- Patience / lane-switching on escalator
+- Social influence
+- Variable walk speeds (fixed at 1 extra step/tick)
+- Stagger rule
+
+### Key parameters
+- **batch-size**: passengers per train (fixed, no min/max range)
+- **train-interval-minutes**: fixed interval between trains
+- **step-gap-stand / step-gap-walk**: boarding cooldown per lane
+- **pct-walkers**: 0% = standing-only, 40% = baseline
+
+### Calibration targets
+- 40% walkers, demand-limited: Rush Hr ≈ 2,550
+- 0% walkers, demand-limited: Rush Hr ≈ 3,250
+- Avg peak throughput (mixed): ~80 pax/min
+- Avg peak throughput (standing): ~110 pax/min</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <experiments>
+    <experiment name="experiment_1" repetitions="5" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition>ticks = 14000</exitCondition>
+      <metrics>
+        <metric>avg-peak-throughput</metric>
+        <metric>max-rush-throughput</metric>
+        <metric>mean-travel-seconds</metric>
+        <metric>demand-pool-size</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="pct-walkers">
+          <value value="0"></value>
+          <value value="40"></value>
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="batch-size">
+          <value value="100"></value>
+          <value value="20"></value>
+          <value value="260"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="step-gap-stand">
+          <value value="2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="step-gap-walk">
+          <value value="3"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+  </experiments>
+</model>

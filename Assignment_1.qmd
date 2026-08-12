@@ -70,7 +70,7 @@ HTML version can be found [here]{.underline} (<https://benjamintee.github.io/CAS
 
 This study investigates how spatial resource distribution and intergenerational wealth transfers shape inequality. Two NetLogo SugarScape models were adapted to examine these mechanisms separately. **SugarScape 2 evaluates how resource concentration (1 peak versus 4 peaks) affects survivability and inequality within a single generation. SugarScape 3 introduces wealth and location inheritance to understand how intergenerational transfers interact with geography to amplify or dampen inequality over time**. Inequality is measured in both using the Gini coefficient[^1].
 
-[^1]: The Gini coefficient measures the inequality of a frequency distribution such as income or wealth levels [@hasell_2023]. A Gini coefficient of 0 reflects perfect equality, where all income or wealth values are the same. In contrast, a Gini coefficient of 1 (or 100%) reflects maximal inequality among values, where a single individual has all the income or wealth while all others have none.
+[^1]: The Gini coefficient measures the inequality of a frequency distribution such as income or wealth levels [@hasell_2023]. A Gini coefficient of 0 reflects perfect equality, where all income or wealth values are the same. In contrast, a Gini coefficient of 1 reflects maximal inequality among values, where a single individual has all the income or wealth while all others have none.
 
 ### 2. Background
 
@@ -94,7 +94,7 @@ SugarScape 3 further introduces:
 
 2.  **Location Inheritance:** An *inherit-location?* toggle allows offspring to spawn near the parent (within 3 patches) rather than at a random location.
 
-Additional reporters were added to track *inequality (Gini), wealth, survival,* and *mortality*. Full code is in the Appendix.
+Additional reporters were added to track *inequality (Gini), wealth, survival,* and *mortality*. 
 
 #### 3.2 Key Assumptions
 
@@ -102,7 +102,7 @@ SugarScape 2 models within-generation competition without replacement. Agents co
 
 SugarScape 3 introduces finite lifespans with *max-age* (60-80) and one-to-one replacement, maintaining a constant population. With *inheritance-rate* set to zero, each generation begins without accumulated advantage. Increasing *inheritance-rate* introduces compounding effects.
 
-All experiments used 400 initial agents and 10 repetitions per parameter combination and 1,000 ticks. Both models assumed constant growback (1 sugar per tick up to patch maximum), without trade, and movement toward the highest-sugar visible patch.
+All experiments used 400 initial agents and 10 repetitions per parameter combination and 1,000 ticks. Both models assumed constant growback (1 sugar per tick up to patch maximum), without trade, and movement toward the highest visible sugar patch.
 
 #### 3.3 Experimental Design
 
@@ -110,13 +110,13 @@ All experiments used 400 initial agents and 10 repetitions per parameter combina
 
 ![**Number of Hills (from 1 to 4) with total sugar held approximately constant**](data\Figure1.png)
 
-[*Experiment 2 (S3)*]{.underline}*:* *inheritance-rate* was varied at intervals of 0.25 between 0.00 and 1.00, with *inherit-location?* toggled on and off, holding geography constant with *num-hills = 2*. This was subsequently repeated at finer intervals of 0.05 to identify tipping points. 
+[*Experiment 2 (S3)*]{.underline}*:* *inheritance-rate* was varied at intervals of 0.25 between 0.00 and 1.00, with *inherit-location?* toggled on and off, holding geography constant with *num-hills = 2*. *inheritance-rate* was subsequently varied at intervals of 0.05 to explore tipping points. 
 
 ### 4. Results
 
 #### 4.1 Experiment 1: Resource Concentration and Inequality (S2)
 
-[Figure 2]{.underline} shows how Gini changes over time for each hill configuration. All configurations begin with Gini at approximately **0.122** and rise sharply in the first 100 ticks as agents compete for resources and weaker agents die off. The trajectories then plateau. The 1-hill configuration reaches the highest final Gini **(0.448)**, while the 4-hill configuration reaches the lowest **(0.354)**, with 2-hill and 3-hill configurations falling in between.
+[Figure 2]{.underline} shows how Gini changes over time for each hill configuration. All configurations begin with Gini around **0.122** and rise sharply in the first 100 ticks as agents compete for resources and weaker agents die off. The trajectories then plateau. The 1-hill configuration reaches the highest final Gini **(0.448)**, while the 4-hill configuration reaches the lowest **(0.354)**, with 2-hill and 3-hill configurations falling in between.
 
 ```{python}
 #| label: Load common libraries and packages
@@ -411,7 +411,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-This U-shaped pattern reflects two competing dynamics. Moderate inheritance acts as insurance where offspring of above-median agents receive a buffer that reduces the impact of unfavourable random traits, compressing the wealth distribution. At higher *inheritance-rates* the larger transfers create persistent wealth differences where wealth compounds across generations faster than it dissipates. *Mean wealth* rises significantly from **35** at baseline to **183** at full *inheritance-rate* ([Table 2]{.underline}). *Death rate* decreases monotonically from **9.6** to **7.5**, with fewer starvation deaths as *inheritance-rate* increases, corroborating the insurance effect.
+This U-shaped pattern reflects two competing dynamics. Moderate inheritance acts as insurance where offspring of above-median agents receive a buffer that reduces the impact of unfavourable random traits, compressing wealth distribution. At higher *inheritance-rates*, larger transfers create persistent wealth differences where wealth compounds across generations faster than it dissipates. *Mean wealth* rises significantly from **35** at baseline to **183** at full *inheritance-rate* ([Table 2]{.underline}). *Death rate* decreases monotonically from **9.6** to **7.5**, with fewer starvation deaths as *inheritance-rate* increases.
 
 ```{python}
 #| label: Summarise table 2 for dfS3a 
@@ -492,11 +492,11 @@ table_S3a_df = table_S3a.reset_index()
 
 ([Figure 4]{.underline}) shows that the U-shaped Gini pattern persists when location inheritance is added.
 
-However, enabling location inheritance generally reduces inequality compared to wealth inheritance alone. At *inheritance-rate* = 0, simply allowing offspring to start near their parent's location reduces the Gini from **0.458** to **0.396**. Offspring of successful agents are born close to productive resource hills, reducing search cost and early starvation risk. Over successive generations, agents gradually optimise their positions, compressing the gini distribution from below.
+However, enabling location inheritance reduces inequality compared to wealth inheritance alone. At *inheritance-rate* = 0, simply allowing offspring to start near their parent's location reduces the Gini from **0.458** to **0.396**. Offspring of successful agents are born close to productive resource hills, reducing search cost and early starvation risk. Over successive generations, agents gradually optimise their positions, compressing the gini distribution from below.
 
-[Figure 5]{.underline} traces the mechanism in detail. Location inheritance primarily operates through improved mortality. Starvation deaths fall from **5,265** to **4,028** at *inheritance-rate* = 0 when location inheritance is added, allowing more agents to survive to old age rather than dying in resource-scarce areas. 
+[Figure 5]{.underline} traces this mechanism. Location inheritance primarily operates through improved mortality. Starvation deaths fall from **5,265** to **4,028** at *inheritance-rate* = 0 when location inheritance is added, allowing more agents to survive to old age rather than dying in resource-scarce areas. 
 
-At *inheritance-rate* = 1, the effect on mean wealth becomes dramatic, rising from **183** without location inheritance to **342** with it, indicating that inherited proximity to resource hills enables compounding that wealth transfers alone cannot achieve [Figure 6]{.underline}. However, this advantage narrows the gap at high inheritance rates as both conditions converge to similarly elevated Gini values (**0.551** vs. **0.541** at full inheritance), as capital accumulation increasingly dominates spatial effects [Figure 7]{.underline}. 
+At *inheritance-rate* = 1, the effect on mean wealth becomes dramatic, rising from **183** without location inheritance to **342** with it, indicating that inherited proximity to resource hills enables compounding that wealth transfers alone cannot achieve ([Figure 6]{.underline}). However, this advantage narrows the gap at high inheritance rates as both conditions converge to similarly elevated Gini values (**0.551** vs. **0.541** at full inheritance), as capital accumulation increasingly dominates spatial effects ([Figure 7]{.underline}). 
 
 ```{python}
 #| label: Parse df_S3b data from behavior space 
@@ -821,7 +821,7 @@ for metric, ylabel, fig_title in [
 
 The experiments reveal that geography establishes a structural baseline range of inequality generated through spatial competition, within which intergenerational mechanisms operate.
 
-At low to moderate *inheritance rates* (0.25–0.50), inequality falls below the spatial-only baseline as modest transfers buffer stochastic disadvantage and compress dispersion, even while mean wealth rises. Once *inheritance rates* exceeds a threshold (≥ 0.75), accumulation dominates and wealth persists and compounds across generations faster than it dissipates. Inequality then surpasses the spatial baseline, reaching **0.551** at full inheritance without location persistence and **0.541** with location persistence. 
+At low to moderate *inheritance rates* (0.25–0.50), inequality falls below the spatial-only baseline as modest transfers buffer stochastic disadvantage and compress dispersion, even while *mean wealth* rises. Once *inheritance rates* exceeds a threshold (≥ 0.75), accumulation dominates and wealth compounds across generations faster than it dissipates. Inequality then surpasses the spatial baseline, reaching **0.551** at full inheritance without location persistence and **0.541** with location persistence. 
 
 While the Gini coefficient provides a consistent basis for comparison, it captures different structural forms of inequality. In SugarScape 2, inequality reflects competitive selection within a single generation, driven by spatial concentration and trait variation. In SugarScape 3a, the Gini captures the net effect of capital persistence and competitive selection. In SugarScape 3b, inequality becomes spatially embedded, reflecting intergenerational transmission of both capital and locational advantage. Thus, similar Gini values across experiments may reflect fundamentally different generative mechanisms.
 
@@ -837,7 +837,7 @@ Location inheritance amplifies these dynamics as a powerful wealth multiplier. A
 
 #### 5.3 Limitations and Sensitivities
 
-Several limitations constrain the generalisability of these findings.
+Several limitations constrain the generalisability of findings.
 
 -   **Constant Population:** The model utilizes a one-to-one replacement system upon agent death (*hatch 1*). In real-world systems, birth rates often correlate inversely with wealth, which could create steeper inequality trajectories.
 
@@ -851,7 +851,7 @@ Several limitations constrain the generalisability of these findings.
 
 This study shows that spatial resource distribution establishes a structural baseline for inequality, but intergenerational transmission shapes how that inequality evolves. In the absence of inheritance, inequality reflects spatial competition and trait-based selection. Introducing wealth transfers produces a non-linear effect where moderate inheritance reduces inequality by buffering agents against stochastic disadvantage, while high inheritance generates compounding effects that exceeds the inequality produced by geography alone. Location inheritance reinforces these dynamics by lowering survival risk near productive resource clusters and accelerating wealth accumulation. 
 
-These findings suggest that inequality is shaped not only by unequal access to space, but by the mechanisms that allow advantage to persist and accumulate across generations. Policies aimed at reducing inequality must therefore address both spatial disparities in opportunity and the channels through which unfair wealth and locational advantages are transmitted.
+These findings suggest that inequality is shaped not only by unequal access to space, but by mechanisms that allow advantage to persist and accumulate across generations. Policies aimed at reducing inequality must therefore address both spatial disparities in opportunity and the channels through which unfair wealth and locational advantages are transmitted.
 
 {{< pagebreak >}}
 
